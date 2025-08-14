@@ -1,0 +1,16 @@
+[package]
+name = "delve"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+argmin = "0.10.0"
+clap = { version = "4.5.40", features = ["derive"] }
+rust-htslib = { version = "0.50.0", default-features = false, git = "https://github.com/berndbohmeier/rust-htslib", branch = "baq-compute" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "my_benchmark"
+harness = false
