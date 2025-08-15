@@ -2,6 +2,7 @@ use rust_htslib::bcf::record::GenotypeAllele;
 use rust_htslib::bcf::{Format, Header, Writer};
 use rust_htslib::htslib::{BAM_FDUP, BAM_FQCFAIL, BAM_FSECONDARY, BAM_FSUPPLEMENTARY, BAM_FUNMAP};
 use rust_htslib::{bam, bam::Read, faidx};
+use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -140,6 +141,15 @@ impl VCFWriter {
         filters: &[&str],
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut header = Header::new();
+
+        header.push_record(format!("##delveVersion={}", env!("CARGO_PKG_VERSION")).as_bytes());
+        header.push_record(
+            format!(
+                "##delveCommand={}",
+                env::args().skip(1).collect::<Vec<_>>().join(" ")
+            )
+            .as_bytes(),
+        );
 
         for (name, length) in contigs {
             header.push_record(format!("##contig=<ID={},length={}>", name, length).as_bytes());
