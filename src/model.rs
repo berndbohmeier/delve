@@ -354,11 +354,9 @@ mod tests {
             },
         ];
         let reference = b'T';
-        let filtered = filter_biallelic(&data, reference);
-        assert_eq!(filtered.len(), 3);
-        assert_eq!(filtered[0].base, b'T');
-        assert_eq!(filtered[1].base, b'A');
-        assert_eq!(filtered[2].base, b'A');
+        let biallelic_data = filter_biallelic(&data, reference);
+        assert_eq!(biallelic_data.reference.len(), 1);
+        assert_eq!(biallelic_data.alt.len(), 2);
     }
     #[test]
     fn test_filter_biallelic_no_reference() {
@@ -386,9 +384,8 @@ mod tests {
         ];
         let reference = b'G';
         let filtered = filter_biallelic(&data, reference);
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].base, b'A');
-        assert_eq!(filtered[1].base, b'A');
+        assert_eq!(filtered.reference.len(), 0);
+        assert_eq!(filtered.alt.len(), 2);
     }
 
     #[test]
@@ -416,7 +413,7 @@ mod tests {
             },
         ];
         let reference = b'T';
-        let table = dp4_table(&data, reference);
+        let table = dp4_table(&filter_biallelic(&data, reference));
         assert_eq!(table.forward_ref, 1);
         assert_eq!(table.reverse_ref, 1);
         assert_eq!(table.forward_alt, 2);
