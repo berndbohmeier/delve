@@ -230,14 +230,22 @@ impl VCFWriter {
                 call.stats.log_likelihood_ratio_alt as f32,
             ],
         )?;
-        let filter_ids: Vec<_> = failed_filters
-            .iter()
-            .map(|f| {
+        let filter_ids: Vec<_> = if !failed_filters.is_empty() {
+            failed_filters
+                .iter()
+                .map(|f| {
+                    header
+                        .name_to_id(f.as_bytes())
+                        .expect("Filter not found in header")
+                })
+                .collect()
+        } else {
+            vec![
                 header
-                    .name_to_id(f.as_bytes())
-                    .expect("Filter not found in header")
-            })
-            .collect();
+                    .name_to_id("PASS".as_bytes())
+                    .expect("Pass filter missing"),
+            ]
+        };
         record.set_filters(&filter_ids.iter().collect::<Vec<_>>())?;
         self.vcf.write(&record)?;
         Ok(())
