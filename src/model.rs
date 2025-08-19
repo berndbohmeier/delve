@@ -237,10 +237,7 @@ impl Model {
             bias,
             general,
             ref_al: col.reference,
-            alt_al: filtered_data
-                .alt
-                .last()
-                .map_or_else(Vec::new, |x| vec![x.base]),
+            alt_al: alt_allel(&filtered_data, &genotype),
         }
     }
 
@@ -322,6 +319,20 @@ impl Model {
             return Genotype::HomozygousAlternate;
         }
         Genotype::Heterozygous
+    }
+}
+
+// Return the alt allel to report
+fn alt_allel(biallelic: &BiallelicData, genotype: &Genotype) -> Vec<u8> {
+    match genotype {
+        Genotype::HomozygousReference | Genotype::Unknown => Vec::new(),
+        Genotype::HomozygousAlternate | Genotype::Heterozygous => vec![
+            biallelic
+                .alt
+                .last()
+                .expect("should have an alt for alt calls")
+                .base,
+        ],
     }
 }
 
