@@ -242,6 +242,7 @@ impl Model {
     }
 
     fn calc(&self, errors_matching_ref: &[f64], errors_mismatching_ref: &[f64]) -> Stats {
+        // If we have no data for alt, there is no gain in computing likelihoods
         if errors_mismatching_ref.is_empty() {
             return Stats {
                 mvaf: 0.0,
@@ -250,6 +251,7 @@ impl Model {
                 log_likelihood_ratio_alt: f64::MAX,
             };
         }
+        // If we have no data for ref, there is no gain in computing likelihoods
         if errors_matching_ref.is_empty() {
             return Stats {
                 mvaf: 1.0,
@@ -263,6 +265,7 @@ impl Model {
             / (errors_matching_ref.len() + errors_mismatching_ref.len()) as f64;
         let p_h1 = p_max_log_likelihood(errors_matching_ref, errors_mismatching_ref, (0.0, 1.0));
 
+        // if we are below the threshold, we know the ref ratio will be 0
         if p_h1 < self.vaf_threshold {
             return Stats {
                 mvaf: p_h1,
@@ -272,6 +275,7 @@ impl Model {
             };
         }
 
+        // if we are above the threshold, we know the alt ratio will be 0
         if p_h1 > 1.0 - self.vaf_threshold {
             return Stats {
                 mvaf: p_h1,
@@ -281,18 +285,9 @@ impl Model {
             };
         }
 
-        // Compute maximum likelihood under H0, H1
-        let p_ref_h0 = p_max_log_likelihood(
-            errors_matching_ref,
-            errors_mismatching_ref,
-            (0.0, self.vaf_threshold),
-        );
-
-        let p_alt_h0 = p_max_log_likelihood(
-            errors_matching_ref,
-            errors_mismatching_ref,
-            (1.0 - self.vaf_threshold, 1.0),
-        );
+        // If we reached here, we know the mle has to be on the boundary
+        let p_ref_h0 = self.vaf_threshold;
+        let p_alt_h0 = 1.0 - self.vaf_threshold;
 
         // Calculate log likelihoods
         let ll_p_h1 = p_log_likelihood(p_h1, errors_matching_ref, errors_mismatching_ref);
