@@ -91,7 +91,7 @@ fn main() {
     let regions = if let Some(region) = cli.region {
         vec![parse_region(&region).unwrap()]
     } else if let Some(regions_file) = cli.regions_file {
-        load_regions(&regions_file).unwrap()
+        load_regions(&regions_file).expect("Failed to load regions")
     } else {
         panic!("Needs one of region or region file");
     };
