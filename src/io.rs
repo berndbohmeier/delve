@@ -74,10 +74,6 @@ pub fn pileup_region(
                     return None; // Skip low mapping quality reads
                 }
                 assert_eq!(record.seq_len(), record.qual().len());
-                if record.seq_len() == 0 {
-                    // TODO, why is this needed?
-                    return None; // Skip empty reads
-                }
                 let base = record.seq()[alignment.qpos().unwrap()];
                 let qual = record.qual()[alignment.qpos().unwrap()];
                 if qual < options.min_bq {
