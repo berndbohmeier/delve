@@ -31,10 +31,9 @@ struct Cli {
     #[clap(short = 's', long = "sample_name", default_value = "sample")]
     sample_name: String,
 
-    /// Output file
+    // Output file
     // #[clap(short = 'o', long = "output")]
     // output: Option<String>,
-
     /// Minimum mapping quality
     #[clap(short = 'q', long = "min-MQ", default_value_t = 0)]
     min_mq: i32,
@@ -67,6 +66,14 @@ struct Cli {
     #[clap(long = "strand-bias-odds-ratio", default_value_t = 7.0)]
     strand_bias_odds_ratio: f64,
 
+    /// Deletion filter threshold. Positions with higher ratio of deletions will be filtered.
+    #[clap(long = "deletion-filter-threshold", default_value_t = 0.8)]
+    deletion_filter_threshold: f64,
+
+    /// Too many low quality reads filter threshold. Positions with higher ratio of low quality reads will be filtered.
+    #[clap(long = "low-qual-reads-filter-threshold", default_value_t = 0.8)]
+    low_quality_reads_filter_threshold: f64,
+
     /// Model parameters (comma-separated floats)
     #[clap(
         long = "model-params",
@@ -89,7 +96,7 @@ fn main() {
     let cli = Cli::parse();
 
     let regions = if let Some(region) = cli.region {
-        vec![parse_region(&region).unwrap()]
+        vec![parse_region(&region).expect("Failed to parse region")]
     } else if let Some(regions_file) = cli.regions_file {
         load_regions(&regions_file).expect("Failed to load regions")
     } else {
@@ -107,9 +114,15 @@ fn main() {
         .map(|name| (name.as_str(), fasta_reader.fetch_seq_len(name) as usize))
         .collect();
 
-    let filters: Vec<Box<dyn filter::Filter>> = vec![Box::new(filter::OddsRatioFilter::new(
-        cli.strand_bias_odds_ratio,
-    ))];
+    let filters: Vec<Box<dyn filter::Filter>> = vec![
+        Box::new(filter::OddsRatioFilter::new(cli.strand_bias_odds_ratio)),
+        Box::new(filter::TooManyLowQualityFilter::new(
+            cli.low_quality_reads_filter_threshold,
+        )),
+        Box::new(filter::ProbabableDeletionFilter::new(
+            cli.deletion_filter_threshold,
+        )),
+    ];
 
     let filter_names = filters
         .iter()
@@ -169,6 +182,8 @@ fn main() {
                         log_likelihood_ratio_alt: 0.,
                     },
                     general: model::General {
+                        dels: column.dels,
+                        low_quals: column.low_quals,
                         depth: column.data.len(),
                     },
                 };

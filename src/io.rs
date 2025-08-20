@@ -53,10 +53,16 @@ pub fn pileup_region(
             // Ignore reads outside of the region
             return None;
         }
+        let mut dels = 0;
+        let mut low_quals = 0;
         let data: Vec<BaseRead> = p
             .alignments()
             .filter_map(|alignment| {
-                if alignment.is_del() || alignment.is_refskip() {
+                if alignment.is_del() {
+                    dels += 1;
+                    return None;
+                }
+                if alignment.is_refskip() {
                     return None;
                 }
                 let record = alignment.record();
@@ -64,6 +70,7 @@ pub fn pileup_region(
                     return None; // Skip filtered reads
                 }
                 if options.min_mq > 0 && record.mapq() < options.min_mq {
+                    low_quals += 1;
                     return None; // Skip low mapping quality reads
                 }
                 assert_eq!(record.seq_len(), record.qual().len());
@@ -74,6 +81,7 @@ pub fn pileup_region(
                 let base = record.seq()[alignment.qpos().unwrap()];
                 let qual = record.qual()[alignment.qpos().unwrap()];
                 if qual < options.min_bq {
+                    low_quals += 1;
                     return None; // Skip low quality bases
                 }
                 let strand = if record.is_reverse() {
@@ -96,6 +104,8 @@ pub fn pileup_region(
             },
             reference: reference_region[p.pos() as usize - region.start],
             data,
+            dels,
+            low_quals,
         })
     }))
 }
@@ -130,6 +140,17 @@ pub fn parse_region(region_str: &str) -> Result<Region, Box<dyn std::error::Erro
     Ok(Region { chrom, start, end })
 }
 
+fn format_header(id: &str, number: usize, type_: &str, description: &str) -> Vec<u8> {
+    format!(
+        r#"##FORMAT=<ID={id},Number={number},Type={type_},Description="{description}">"#,
+        id = id,
+        number = number,
+        type_ = type_,
+        description = description
+    )
+    .into_bytes()
+}
+
 pub struct VCFWriter {
     vcf: Writer,
 }
@@ -161,27 +182,29 @@ impl VCFWriter {
             );
         }
 
-        header.push_record(
-            r#"##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">"#.as_bytes(),
-        );
-        header.push_record(
-            r#"##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">"#.as_bytes(),
-        );
-        header.push_record(
-            r#"##FORMAT=<ID=ORT,Number=1,Type=Float,Description="Odds ratio test value">"#
-                .as_bytes(),
-        );
-        header.push_record(
-            r#"##FORMAT=<ID=VAF,Number=1,Type=Float,Description="Variant allele frequency">"#
-                .as_bytes(),
-        );
-        header.push_record(
-            r#"##FORMAT=<ID=MVAF,Number=1,Type=Float,Description="Model estimated VAF">"#
-                .as_bytes(),
-        );
-        header.push_record(
-            r#"##FORMAT=<ID=LRT,Number=2,Type=Float,Description="LRT statistic againts p=0 and p=1">"#.as_bytes(),
-        );
+        header.push_record(&format_header("GT", 1, "String", "Genotype"));
+        header.push_record(&format_header("DP", 1, "Integer", "Read depth"));
+        header.push_record(&format_header("ORT", 1, "Float", "Odds ratio test value"));
+        header.push_record(&format_header(
+            "VAF",
+            1,
+            "Float",
+            "Variant allele frequency",
+        ));
+        header.push_record(&format_header("MVAF", 1, "Float", "Model estimated VAF"));
+        header.push_record(&format_header(
+            "LRT",
+            2,
+            "Float",
+            "LRT statistic againts p=0 and p=1",
+        ));
+        header.push_record(&format_header("DEL", 1, "Integer", "Number of deletions"));
+        header.push_record(&format_header(
+            "LQR",
+            1,
+            "Integer",
+            "Number of low quality reads",
+        ));
 
         header.push_sample(sample_name.as_bytes());
         let vcf = Writer::from_stdout(&header, true, Format::Vcf)?;
@@ -220,6 +243,8 @@ impl VCFWriter {
         };
         record.push_genotypes(alleles)?;
         record.push_format_integer(b"DP", &[call.general.depth as i32])?;
+        record.push_format_integer(b"DEL", &[call.general.dels as i32])?;
+        record.push_format_integer(b"LQR", &[call.general.low_quals as i32])?;
         record.push_format_float(b"ORT", &[call.bias.odds_ratio as f32])?;
         record.push_format_float(b"VAF", &[call.stats.vaf as f32])?;
         record.push_format_float(b"MVAF", &[call.stats.mvaf as f32])?;

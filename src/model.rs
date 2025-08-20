@@ -174,6 +174,8 @@ pub struct PileUpColumn {
     pub position: Position,
     pub reference: u8,
     pub data: Vec<BaseRead>,
+    pub dels: u64,
+    pub low_quals: u64,
 }
 
 pub struct Model {
@@ -198,6 +200,8 @@ pub struct BiasStats {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct General {
     pub depth: usize,
+    pub dels: u64,
+    pub low_quals: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -229,7 +233,11 @@ impl Model {
         let genotype = self.genotype(&stats);
 
         let bias = BiasStats { odds_ratio };
-        let general = General { depth: data.len() };
+        let general = General {
+            depth: data.len(),
+            dels: col.dels,
+            low_quals: col.low_quals,
+        };
         Call {
             position: col.position.clone(),
             genotype,
