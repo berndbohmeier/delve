@@ -1,14 +1,17 @@
+//! Variant caller for mixed infections, mainly with the goal to handle Malaria infections
 use clap::Parser;
 use rust_htslib::bam;
 use rust_htslib::htslib;
 use std::iter::once;
 
+use crate::filter::Filter;
 use crate::io::{VCFWriter, load_regions, parse_region};
 
 mod filter;
 mod io;
 mod model;
 
+/// Cli arguments and options
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Cli {
@@ -149,16 +152,18 @@ fn main() {
         )),
     ];
 
-    let filter_names = filters
+    let min_cov_filter = filter::MinCovFilter::new(cli.min_cov as usize);
+
+    let all_filters = filters
         .iter()
-        .map(|f| f.name())
-        .chain(once("MinCov"))
+        .map(|f| f.as_ref())
+        .chain(once(&min_cov_filter as &dyn Filter))
         .collect::<Vec<_>>();
     let mut vcf_writer = VCFWriter::new(
         cli.output.as_ref().map_or("-", |o| o.as_str()),
         &contigs,
         &cli.sample_name,
-        &filter_names,
+        &all_filters,
         true,
     )
     .expect("Failed to create VCF writer");
@@ -223,7 +228,7 @@ fn main() {
                         depth: column.data.len(),
                     },
                 };
-                let failed_filters = vec!["MinCov"];
+                let failed_filters: Vec<&dyn Filter> = vec![&min_cov_filter];
                 (call, failed_filters)
             } else {
                 let call = model.call(&column);
@@ -237,7 +242,10 @@ fn main() {
                 // Filter out non variant calls
                 continue;
             }
-            if io::should_filter(&apply_filters, &failed_filters) {
+            if io::should_filter(
+                &apply_filters,
+                &failed_filters.iter().map(|f| f.name()).collect::<Vec<_>>(),
+            ) {
                 // Filter out sites with no matching filter
                 continue;
             }

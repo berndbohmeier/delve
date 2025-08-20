@@ -1,3 +1,4 @@
+//! IO features to read and write various file types
 use rust_htslib::bcf::record::GenotypeAllele;
 use rust_htslib::bcf::{Format, Header, Writer};
 use rust_htslib::htslib::{BAM_FDUP, BAM_FQCFAIL, BAM_FSECONDARY, BAM_FSUPPLEMENTARY, BAM_FUNMAP};
@@ -6,6 +7,7 @@ use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+use crate::filter::Filter;
 use crate::model::{BaseRead, Call, Genotype, PileUpColumn, Position, Strand};
 
 // struct to represent a region in the genome
@@ -156,7 +158,7 @@ impl VCFWriter {
         path: &str,
         contigs: &[(&str, usize)],
         sample_name: &str,
-        filters: &[&str],
+        filters: &[&dyn Filter],
         compressed: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut header = Header::new();
@@ -176,7 +178,12 @@ impl VCFWriter {
 
         for filter in filters {
             header.push_record(
-                format!("##FILTER=<ID={},Description=\"{}\">", filter, filter).as_bytes(),
+                format!(
+                    "##FILTER=<ID={},Description=\"{}\">",
+                    filter.name(),
+                    filter.description()
+                )
+                .as_bytes(),
             );
         }
 
@@ -212,7 +219,7 @@ impl VCFWriter {
     pub fn write_call(
         &mut self,
         call: &Call,
-        failed_filters: &[&str],
+        failed_filters: &[&dyn Filter],
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut record = self.vcf.empty_record();
         let header = self.vcf.header();
@@ -258,7 +265,7 @@ impl VCFWriter {
                 .iter()
                 .map(|f| {
                     header
-                        .name_to_id(f.as_bytes())
+                        .name_to_id(f.name().as_bytes())
                         .expect("Filter not found in header")
                 })
                 .collect()

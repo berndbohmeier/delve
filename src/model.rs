@@ -1,9 +1,11 @@
+//! The statistical model for variant detection and bias filtering
 use std::collections::HashMap;
 
 use argmin::core::{CostFunction, Error};
 use argmin::core::{Executor, State};
 use argmin::solver::brent::BrentOpt;
 
+/// Read of a single base
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BaseRead {
     pub base: u8,
@@ -25,12 +27,13 @@ pub enum Genotype {
     Unknown,
 }
 
+/// Biallelic data including all the reference bases and the most common second base as the alternative base
 struct BiallelicData {
     pub reference: Vec<BaseRead>,
     pub alt: Vec<BaseRead>,
 }
 
-// Filter data for the two most common alleles, sort so reference comes first
+/// Filter data to the reference bases and the other most common base
 fn filter_biallelic(data: &[BaseRead], reference: u8) -> BiallelicData {
     let mut counter: HashMap<u8, usize> = HashMap::new();
     for d in data {
@@ -63,7 +66,7 @@ fn filter_biallelic(data: &[BaseRead], reference: u8) -> BiallelicData {
     }
 }
 
-// Returns (errors_matching_ref, errors_mismatching_ref)
+/// Returns (errors_matching_ref, errors_mismatching_ref)
 fn error_probabilities(data: &BiallelicData) -> (Vec<f64>, Vec<f64>) {
     (
         data.reference.iter().map(|x| x.error).collect(),
@@ -71,7 +74,7 @@ fn error_probabilities(data: &BiallelicData) -> (Vec<f64>, Vec<f64>) {
     )
 }
 
-// Log likelihood for a given p
+/// Log likelihood for a given p, where p is the proportion of of alt to ref strain
 fn p_log_likelihood(p: f64, errors_matching_ref: &[f64], errors_mismatching_ref: &[f64]) -> f64 {
     let mut sum = 0.0;
     for &e in errors_matching_ref {
@@ -83,12 +86,13 @@ fn p_log_likelihood(p: f64, errors_matching_ref: &[f64], errors_mismatching_ref:
     sum
 }
 
-struct LogLikelihood<'a> {
+/// Data for the log likelihood problem to be used in argmin
+struct LogLikelihoodProblem<'a> {
     errors_matching_ref: &'a [f64],
     errors_mismatching_ref: &'a [f64],
 }
 
-impl<'a> CostFunction for LogLikelihood<'a> {
+impl<'a> CostFunction for LogLikelihoodProblem<'a> {
     type Param = f64;
     type Output = f64;
 
@@ -102,13 +106,13 @@ impl<'a> CostFunction for LogLikelihood<'a> {
     }
 }
 
-// Maximize log likelihood numerically using Brent's method from argmin
+/// Maximize log likelihood numerically using Brent's method from argmin, returning the MLE of p
 fn p_max_log_likelihood(
     errors_matching_ref: &[f64],
     errors_mismatching_ref: &[f64],
     bounds: (f64, f64),
 ) -> f64 {
-    let op = LogLikelihood {
+    let op = LogLikelihoodProblem {
         errors_matching_ref,
         errors_mismatching_ref,
     };
@@ -178,6 +182,7 @@ pub struct PileUpColumn {
     pub low_quals: u64,
 }
 
+/// Composite Likelihood model for variant calling
 pub struct Model {
     pub vaf_threshold: f64,
     pub lambda_threshold_ref: f64,
