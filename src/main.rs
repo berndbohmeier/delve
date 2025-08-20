@@ -16,11 +16,17 @@ struct Cli {
     bamfile: String,
 
     /// Reference FASTA file
-    #[clap(short = 'f', long = "fasta-ref", value_name = "FASTA", required = true)]
+    #[clap(
+        short = 'f',
+        long = "fasta-ref",
+        value_name = "FASTA",
+        required = true,
+        value_name = "FILE"
+    )]
     fasta_ref: String,
 
     /// Regions file
-    #[clap(short = 'R', long = "regions-file")]
+    #[clap(short = 'R', long = "regions-file", value_name = "FILE")]
     regions_file: Option<String>,
 
     /// Region string
@@ -28,11 +34,16 @@ struct Cli {
     region: Option<String>,
 
     /// Sample name
-    #[clap(short = 's', long = "sample_name", default_value = "sample")]
+    #[clap(
+        short = 's',
+        long = "sample_name",
+        default_value = "sample",
+        value_name = "NAME"
+    )]
     sample_name: String,
 
     /// Output file
-    #[clap(short = 'o', long = "output")]
+    #[clap(short = 'o', long = "output", value_name = "FILE")]
     output: Option<String>,
 
     /// Minimum mapping quality
@@ -56,7 +67,7 @@ struct Cli {
     // min_vaf: f64,
 
     /// Truncate regions
-    #[clap(long = "truncate-regions", default_value_t = 0)]
+    #[clap(long = "truncate-regions", default_value_t = 0, value_name = "INT")]
     truncate_regions: usize,
 
     /// Compute BAQ
@@ -64,15 +75,27 @@ struct Cli {
     compute_baq: bool,
 
     /// Strand bias odds ratio
-    #[clap(long = "strand-bias-odds-ratio", default_value_t = 7.0)]
+    #[clap(
+        long = "strand-bias-odds-ratio",
+        default_value_t = 7.0,
+        value_name = "FLOAT"
+    )]
     strand_bias_odds_ratio: f64,
 
     /// Deletion filter threshold. Positions with higher ratio of deletions will be filtered.
-    #[clap(long = "deletion-filter-threshold", default_value_t = 0.8)]
+    #[clap(
+        long = "deletion-filter-threshold",
+        default_value_t = 0.8,
+        value_name = "FLOAT"
+    )]
     deletion_filter_threshold: f64,
 
     /// Too many low quality reads filter threshold. Positions with higher ratio of low quality reads will be filtered.
-    #[clap(long = "low-qual-reads-filter-threshold", default_value_t = 0.8)]
+    #[clap(
+        long = "low-qual-reads-filter-threshold",
+        default_value_t = 0.8,
+        value_name = "FLOAT"
+    )]
     low_quality_reads_filter_threshold: f64,
 
     /// Model parameters (comma-separated floats)
@@ -80,17 +103,18 @@ struct Cli {
         long = "model-params",
         use_value_delimiter = true,
         value_delimiter = ',',
-        default_value = "8.0,8.0,0.01"
+        default_value = "8.0,8.0,0.01",
+        value_name = "LRT_REF,LRT_ALT,H0_VAF"
     )]
     model_params: Vec<f64>,
-
-    /// Show failed filters
-    // #[clap(long = "show-failed-filters")]
-    // show_failed_filters: bool,
 
     /// Show only variants
     #[clap(short = 'v', long = "variants-only")]
     variants_only: bool,
+
+    /// Apply filters
+    #[clap(long = "apply-filters", value_name = "LIST")]
+    apply_filters: Option<String>,
 }
 
 fn main() {
@@ -174,6 +198,11 @@ fn main() {
             lambda_thereshold_alt: cli.model_params[1],
         };
 
+        let apply_filters: Vec<_> = cli
+            .apply_filters
+            .as_ref()
+            .map_or_else(Vec::new, |s| s.split(",").collect());
+
         for column in iter {
             let (call, failed_filters) = if column.data.len() < cli.min_cov as usize {
                 let call = model::Call {
@@ -205,6 +234,11 @@ fn main() {
                 && (call.genotype != model::Genotype::Heterozygous
                     && call.genotype != model::Genotype::HomozygousAlternate)
             {
+                // Filter out non variant calls
+                continue;
+            }
+            if io::should_filter(&apply_filters, &failed_filters) {
+                // Filter out sites with no matching filter
                 continue;
             }
             vcf_writer

@@ -274,3 +274,11 @@ impl VCFWriter {
         Ok(())
     }
 }
+
+pub fn should_filter(apply_filters: &[&str], failed_filters: &[&str]) -> bool {
+    !apply_filters.is_empty()
+        && !apply_filters.iter().any(|filter| match *filter {
+            "PASS" => failed_filters.is_empty(),
+            other => failed_filters.contains(&other),
+        })
+}
