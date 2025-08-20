@@ -153,9 +153,11 @@ pub struct VCFWriter {
 
 impl VCFWriter {
     pub fn new(
+        path: &str,
         contigs: &[(&str, usize)],
         sample_name: &str,
         filters: &[&str],
+        compressed: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut header = Header::new();
 
@@ -203,7 +205,7 @@ impl VCFWriter {
         ));
 
         header.push_sample(sample_name.as_bytes());
-        let vcf = Writer::from_stdout(&header, true, Format::Vcf)?;
+        let vcf = Writer::from_path(path, &header, compressed, Format::Vcf)?;
         Ok(VCFWriter { vcf })
     }
 

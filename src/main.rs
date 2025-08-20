@@ -31,9 +31,10 @@ struct Cli {
     #[clap(short = 's', long = "sample_name", default_value = "sample")]
     sample_name: String,
 
-    // Output file
-    // #[clap(short = 'o', long = "output")]
-    // output: Option<String>,
+    /// Output file
+    #[clap(short = 'o', long = "output")]
+    output: Option<String>,
+
     /// Minimum mapping quality
     #[clap(short = 'q', long = "min-MQ", default_value_t = 0)]
     min_mq: i32,
@@ -129,8 +130,14 @@ fn main() {
         .map(|f| f.name())
         .chain(once("MinCov"))
         .collect::<Vec<_>>();
-    let mut vcf_writer = VCFWriter::new(&contigs, &cli.sample_name, &filter_names)
-        .expect("Failed to create VCF writer");
+    let mut vcf_writer = VCFWriter::new(
+        cli.output.as_ref().map_or("-", |o| o.as_str()),
+        &contigs,
+        &cli.sample_name,
+        &filter_names,
+        true,
+    )
+    .expect("Failed to create VCF writer");
     let mut bam_reader =
         bam::IndexedReader::from_path(&cli.bamfile).expect("Failed to open BAM file");
     bam_reader.set_filters(
