@@ -50,7 +50,7 @@ pub fn pileup_region(
     Ok(pileup_iter.filter_map(move |pileup| {
         let p = pileup.unwrap(); // TODO: handle error
         if (p.pos() as usize) < region.start + options.truncate_regions
-            || (p.pos() as usize) > region.end - options.truncate_regions
+            || (p.pos() as usize) >= region.end - options.truncate_regions
         {
             // Ignore reads outside of the region
             return None;

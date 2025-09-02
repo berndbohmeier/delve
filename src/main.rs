@@ -5,6 +5,7 @@ use rust_htslib::htslib;
 use std::iter::once;
 
 use crate::filter::Filter;
+use crate::io::Region;
 use crate::io::{VCFWriter, load_regions, parse_region};
 
 mod filter;
@@ -123,14 +124,6 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    let regions = if let Some(region) = cli.region {
-        vec![parse_region(&region).expect("Failed to parse region")]
-    } else if let Some(regions_file) = cli.regions_file {
-        load_regions(&regions_file).expect("Failed to load regions")
-    } else {
-        panic!("Needs one of region or region file");
-    };
-
     let fasta_reader =
         rust_htslib::faidx::Reader::from_path(&cli.fasta_ref).expect("Failed to open FASTA file");
 
@@ -141,6 +134,21 @@ fn main() {
         .iter()
         .map(|name| (name.as_str(), fasta_reader.fetch_seq_len(name) as usize))
         .collect();
+
+    let regions = if let Some(region) = cli.region {
+        vec![parse_region(&region).expect("Failed to parse region")]
+    } else if let Some(regions_file) = cli.regions_file {
+        load_regions(&regions_file).expect("Failed to load regions")
+    } else {
+        contigs
+            .iter()
+            .map(|(name, len)| Region {
+                chrom: name.to_string(),
+                start: 0,
+                end: *len,
+            })
+            .collect()
+    };
 
     let filters: Vec<Box<dyn filter::Filter>> = vec![
         Box::new(filter::OddsRatioFilter::new(cli.strand_bias_odds_ratio)),
