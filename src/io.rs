@@ -1,11 +1,14 @@
 //! IO features to read and write various file types
+use std::env;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+use anyhow::{Context, Error};
 use rust_htslib::bcf::record::GenotypeAllele;
 use rust_htslib::bcf::{Format, Header, Writer};
 use rust_htslib::htslib::{BAM_FDUP, BAM_FQCFAIL, BAM_FSECONDARY, BAM_FSUPPLEMENTARY, BAM_FUNMAP};
 use rust_htslib::{bam, bam::Read, faidx};
-use std::env;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use thiserror::Error;
 
 use crate::filter::Filter;
 use crate::model::{BaseRead, Call, Genotype, PileUpColumn, Position, Strand};
@@ -33,22 +36,27 @@ pub fn pileup_region(
     fasta_reader: &faidx::Reader,
     region: &Region,
     options: &PileUpOptions,
-) -> Result<impl Iterator<Item = PileUpColumn>, Box<dyn std::error::Error>> {
-    bam_reader.fetch((
-        region.chrom.as_str(),
-        region.start as i64,
-        region.end as i64,
-    ))?;
+) -> Result<impl Iterator<Item = Result<PileUpColumn, Error>>, Error> {
+    bam_reader
+        .fetch((
+            region.chrom.as_str(),
+            region.start as i64,
+            region.end as i64,
+        ))
+        .with_context(|| "failed to fetch region")?;
 
     // Get the reference base for the regio
     let reference_region = fasta_reader
         .fetch_seq(region.chrom.as_str(), region.start, region.end)
-        .expect("Failed to fetch reference base"); // TODO: handle error
+        .with_context(|| "failed to fetch reference region")?;
 
     let mut pileup_iter = bam_reader.pileup();
     pileup_iter.set_max_depth(options.max_cov);
     Ok(pileup_iter.filter_map(move |pileup| {
-        let p = pileup.unwrap(); // TODO: handle error
+        let p = match pileup {
+            Ok(p) => p,
+            Err(e) => return Some(Err(Error::new(e))),
+        };
         if (p.pos() as usize) < region.start + options.truncate_regions
             || (p.pos() as usize) >= region.end - options.truncate_regions
         {
@@ -95,7 +103,7 @@ pub fn pileup_region(
             })
             .collect();
 
-        Some(PileUpColumn {
+        Some(Ok(PileUpColumn {
             position: Position {
                 name: region.chrom.clone(),
                 pos: p.pos() as usize,
@@ -104,37 +112,74 @@ pub fn pileup_region(
             data,
             dels,
             low_quals,
-        })
+        }))
     }))
 }
 
+#[derive(Error, Debug)]
+pub enum LoadRegionsError<'a> {
+    #[error("failed to read file")]
+    IO(#[from] std::io::Error),
+    #[error("invalid {1} at line {2}")]
+    InvalidInteger(#[source] std::num::ParseIntError, &'a str, usize),
+    #[error("missing {0} in line {1}")]
+    MissingField(&'a str, usize),
+}
+
 // Loads regions from a file: chrom, start, end (tab or space separated)
-pub fn load_regions(filename: &str) -> Result<Vec<Region>, Box<dyn std::error::Error>> {
+pub fn load_regions(filename: &str) -> Result<Vec<Region>, LoadRegionsError<'static>> {
     let file = File::open(filename)?;
     let reader = BufReader::new(file);
     let mut result = Vec::new();
-    for line in reader.lines() {
+    for (i, line) in reader.lines().enumerate() {
         let line = line?;
         let mut parts = line.split_whitespace();
-        let chrom = parts.next().unwrap_or("").to_string(); // TODO error handling
-        let start = parts.next().unwrap_or("0").parse::<usize>().unwrap_or(0);
-        let end = parts.next().unwrap_or("0").parse::<usize>().unwrap_or(0);
+        let chrom = parts
+            .next()
+            .ok_or(LoadRegionsError::MissingField("chrom", i + 1))?
+            .to_string();
+        let start = parts
+            .next()
+            .ok_or(LoadRegionsError::MissingField("start", i + 1))?
+            .parse::<usize>()
+            .map_err(|err| LoadRegionsError::InvalidInteger(err, "start", i + 1))?;
+        let end = parts
+            .next()
+            .ok_or(LoadRegionsError::MissingField("end", i + 1))?
+            .parse::<usize>()
+            .map_err(|err| LoadRegionsError::InvalidInteger(err, "end", i + 1))?;
         result.push(Region { chrom, start, end });
     }
     Ok(result)
 }
 
+#[derive(Error, Debug)]
+pub enum ParseRegionError<'a> {
+    #[error("invalid integer")]
+    InvalidInteger(#[from] std::num::ParseIntError),
+    #[error("missing {0}")]
+    MissingField(&'a str),
+}
+
 // Parses a region string like "chr1:100-200" into (chrom, start, end)
-pub fn parse_region(region_str: &str) -> Result<Region, Box<dyn std::error::Error>> {
+pub fn parse_region(region_str: &str) -> Result<Region, ParseRegionError<'static>> {
     let mut parts = region_str.split(':');
-    let chrom = parts.next().ok_or("Missing chrom")?.to_string();
-    let range = parts.next().ok_or("Missing range")?;
+    let chrom = parts
+        .next()
+        .ok_or(ParseRegionError::MissingField("chrom"))?
+        .to_string();
+    let range = parts
+        .next()
+        .ok_or(ParseRegionError::MissingField("range"))?;
     let mut range_parts = range.split('-');
     let start = range_parts
         .next()
-        .ok_or("Missing start")?
+        .ok_or(ParseRegionError::MissingField("start"))?
         .parse::<usize>()?;
-    let end = range_parts.next().ok_or("Missing end")?.parse::<usize>()?;
+    let end = range_parts
+        .next()
+        .ok_or(ParseRegionError::MissingField("end"))?
+        .parse::<usize>()?;
     Ok(Region { chrom, start, end })
 }
 
@@ -149,18 +194,22 @@ fn format_header(id: &str, number: usize, type_: &str, description: &str) -> Vec
     .into_bytes()
 }
 
+#[derive(Error, Debug)]
+#[error("vcf write error")]
+pub struct VCFError(#[from] rust_htslib::errors::Error);
+
 pub struct VCFWriter {
     vcf: Writer,
 }
 
 impl VCFWriter {
-    pub fn new(
+    pub fn create(
         path: &str,
         contigs: &[(&str, usize)],
         sample_name: &str,
         filters: &[&dyn Filter],
         compressed: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, VCFError> {
         let mut header = Header::new();
 
         header.push_record(format!("##delveVersion={}", env!("CARGO_PKG_VERSION")).as_bytes());
@@ -220,7 +269,7 @@ impl VCFWriter {
         &mut self,
         call: &Call,
         failed_filters: &[&dyn Filter],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), VCFError> {
         let mut record = self.vcf.empty_record();
         let header = self.vcf.header();
         record.set_rid(header.name2rid(call.position.name.as_bytes()).ok());
@@ -266,14 +315,14 @@ impl VCFWriter {
                 .map(|f| {
                     header
                         .name_to_id(f.name().as_bytes())
-                        .expect("Filter not found in header")
+                        .expect("should have filter {} in header")
                 })
                 .collect()
         } else {
             vec![
                 header
                     .name_to_id("PASS".as_bytes())
-                    .expect("Pass filter missing"),
+                    .expect("should have a pass filter"),
             ]
         };
         record.set_filters(&filter_ids.iter().collect::<Vec<_>>())?;

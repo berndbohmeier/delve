@@ -1,8 +1,11 @@
 //! Variant caller for mixed infections, mainly with the goal to handle Malaria infections
+use std::iter::once;
+
+use anyhow::Ok;
+use anyhow::{Context, Result};
 use clap::Parser;
 use rust_htslib::bam;
 use rust_htslib::htslib;
-use std::iter::once;
 
 use crate::filter::Filter;
 use crate::io::Region;
@@ -121,24 +124,25 @@ struct Cli {
     apply_filters: Option<String>,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let fasta_reader =
-        rust_htslib::faidx::Reader::from_path(&cli.fasta_ref).expect("Failed to open FASTA file");
+    let fasta_reader = rust_htslib::faidx::Reader::from_path(&cli.fasta_ref)
+        .with_context(|| format!("failed to open FASTA file `{}`", &cli.fasta_ref))?;
 
     let seq_names = fasta_reader
         .seq_names()
-        .expect("Failed to get sequence names from FASTA file");
+        .with_context(|| "failed to get sequence names from FASTA file")?;
     let contigs: Vec<_> = seq_names
         .iter()
         .map(|name| (name.as_str(), fasta_reader.fetch_seq_len(name) as usize))
         .collect();
 
     let regions = if let Some(region) = cli.region {
-        vec![parse_region(&region).expect("Failed to parse region")]
+        vec![parse_region(&region).with_context(|| format!("failed to parse region `{region}`"))?]
     } else if let Some(regions_file) = cli.regions_file {
-        load_regions(&regions_file).expect("Failed to load regions")
+        load_regions(&regions_file)
+            .with_context(|| format!("failed to load regions from file `{regions_file}`"))?
     } else {
         contigs
             .iter()
@@ -167,16 +171,16 @@ fn main() {
         .map(|f| f.as_ref())
         .chain(once(&min_cov_filter as &dyn Filter))
         .collect::<Vec<_>>();
-    let mut vcf_writer = VCFWriter::new(
+    let mut vcf_writer = VCFWriter::create(
         cli.output.as_ref().map_or("-", |o| o.as_str()),
         &contigs,
         &cli.sample_name,
         &all_filters,
         true,
     )
-    .expect("Failed to create VCF writer");
-    let mut bam_reader =
-        bam::IndexedReader::from_path(&cli.bamfile).expect("Failed to open BAM file");
+    .with_context(|| "failed to create vcf file")?;
+    let mut bam_reader = bam::IndexedReader::from_path(&cli.bamfile)
+        .with_context(|| format!("failed to open BAM file `{}`", &cli.bamfile))?;
     bam_reader.set_filters(
         htslib::BAM_FUNMAP
             | htslib::BAM_FSECONDARY
@@ -193,7 +197,7 @@ fn main() {
                     | htslib::htsRealnFlags_BAQ_EXTEND
                     | htslib::htsRealnFlags_BAQ_ONT) as usize,
             )
-            .expect("Faled to enable baq computation");
+            .with_context(|| "failed to enable BAQ computation")?;
     }
     for region in regions {
         let options = io::PileUpOptions {
@@ -203,7 +207,7 @@ fn main() {
             truncate_regions: cli.truncate_regions,
         };
         let iter = io::pileup_region(&mut bam_reader, &fasta_reader, &region, &options)
-            .expect("Failed to create pileup iterator");
+            .with_context(|| "failed to create pileup iterator")?;
 
         let model = model::Model {
             vaf_threshold: cli.model_params[2],
@@ -217,6 +221,7 @@ fn main() {
             .map_or_else(Vec::new, |s| s.split(",").collect());
 
         for column in iter {
+            let column = column.with_context(|| "failed to pileup column")?;
             let (call, failed_filters) = if column.data.len() < cli.min_cov as usize {
                 let call = model::Call {
                     position: column.position.clone(),
@@ -259,9 +264,10 @@ fn main() {
             }
             vcf_writer
                 .write_call(&call, &failed_filters)
-                .expect("Failed to write call to VCF");
+                .with_context(|| "failed to write call to VCF")?;
         }
     }
+    Ok(())
 }
 
 #[test]
