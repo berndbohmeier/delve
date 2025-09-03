@@ -1,3 +1,4 @@
+[![CI](https://github.com/berndbohmeier/delve/actions/workflows/ci.yml/badge.svg)](https://github.com/berndbohmeier/delve/actions/workflows/ci.yml)
 [![Conda Downloads](https://img.shields.io/conda/dn/bioconda/delve-bio?color=green&link=https%3A%2F%2Fanaconda.org%2Fbioconda%2Fdelve-bio)](https://anaconda.org/bioconda/delve-bio)
 ![OS - Linux | OSX](https://img.shields.io/badge/OS-Linux_|_OSX-informational)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/delve-bio/README.html)
