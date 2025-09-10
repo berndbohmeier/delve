@@ -122,6 +122,10 @@ struct Cli {
     /// Apply filters
     #[clap(long = "apply-filters", value_name = "LIST")]
     apply_filters: Option<String>,
+
+    /// Set genotypes of failed samples to missing value (.) or reference (0)
+    #[clap(long = "set-failed-GTs", value_name = "TYPE", value_parser = ["0", "."])]
+    set_failed_gts: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -222,7 +226,7 @@ fn main() -> Result<()> {
 
         for column in iter {
             let column = column.with_context(|| "failed to pileup column")?;
-            let (call, failed_filters) = if column.data.len() < cli.min_cov as usize {
+            let (mut call, failed_filters) = if column.data.len() < cli.min_cov as usize {
                 let call = model::Call {
                     position: column.position.clone(),
                     genotype: model::Genotype::Unknown,
@@ -261,6 +265,24 @@ fn main() -> Result<()> {
             ) {
                 // Filter out sites with no matching filter
                 continue;
+            }
+            if cli.set_failed_gts.is_some() && !failed_filters.is_empty() {
+                match cli.set_failed_gts.as_deref() {
+                    Some(".") => {
+                        call.genotype = model::Genotype::Unknown;
+                    }
+                    Some("0") => {
+                        if !failed_filters.is_empty() {
+                            call.genotype = model::Genotype::HomozygousReference;
+                        }
+                    }
+                    Some(_) => {
+                        return Err(anyhow::anyhow!(
+                            "unknown value for --set-failed-GTs, use . or 0"
+                        ));
+                    }
+                    None => {}
+                }
             }
             vcf_writer
                 .write_call(&call, &failed_filters)
