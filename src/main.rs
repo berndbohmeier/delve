@@ -3,7 +3,7 @@ use std::iter::once;
 
 use anyhow::Ok;
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use rust_htslib::bam;
 use rust_htslib::htslib;
 
@@ -308,7 +308,10 @@ fn main() {
     if let Err(error) = match cli.command {
         Commands::Call(args) => call_variants(args),
     } {
-        eprintln!("error: {error:#}");
+        Cli::command()
+            .error(clap::error::ErrorKind::InvalidValue, format!("{error:#}"))
+            .print()
+            .expect("error writing error message");
         std::process::exit(1);
     }
 }
