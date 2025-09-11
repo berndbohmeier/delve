@@ -3,7 +3,7 @@ use std::iter::once;
 
 use anyhow::Ok;
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rust_htslib::bam;
 use rust_htslib::htslib;
 
@@ -15,10 +15,22 @@ mod filter;
 mod io;
 mod model;
 
-/// Cli arguments and options
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Call variants from a BAM file
+    Call(CallArgs),
+}
+
+/// Arguments for variant calling
+#[derive(Parser, Debug)]
+struct CallArgs {
     /// BAM file
     bamfile: String,
 
@@ -128,11 +140,9 @@ struct Cli {
     set_failed_gts: Option<String>,
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-
-    let fasta_reader = rust_htslib::faidx::Reader::from_path(&cli.fasta_ref)
-        .with_context(|| format!("failed to open FASTA file `{}`", &cli.fasta_ref))?;
+fn call_variants(args: CallArgs) -> Result<()> {
+    let fasta_reader = rust_htslib::faidx::Reader::from_path(&args.fasta_ref)
+        .with_context(|| format!("failed to open FASTA file `{}`", &args.fasta_ref))?;
 
     let seq_names = fasta_reader
         .seq_names()
@@ -142,9 +152,9 @@ fn main() -> Result<()> {
         .map(|name| (name.as_str(), fasta_reader.fetch_seq_len(name) as usize))
         .collect();
 
-    let regions = if let Some(region) = cli.region {
+    let regions = if let Some(region) = args.region {
         vec![parse_region(&region).with_context(|| format!("failed to parse region `{region}`"))?]
-    } else if let Some(regions_file) = cli.regions_file {
+    } else if let Some(regions_file) = args.regions_file {
         load_regions(&regions_file)
             .with_context(|| format!("failed to load regions from file `{regions_file}`"))?
     } else {
@@ -159,16 +169,16 @@ fn main() -> Result<()> {
     };
 
     let filters: Vec<Box<dyn filter::Filter>> = vec![
-        Box::new(filter::OddsRatioFilter::new(cli.strand_bias_odds_ratio)),
+        Box::new(filter::OddsRatioFilter::new(args.strand_bias_odds_ratio)),
         Box::new(filter::TooManyLowQualityFilter::new(
-            cli.low_quality_reads_filter_threshold,
+            args.low_quality_reads_filter_threshold,
         )),
         Box::new(filter::ProbabableDeletionFilter::new(
-            cli.deletion_filter_threshold,
+            args.deletion_filter_threshold,
         )),
     ];
 
-    let min_cov_filter = filter::MinCovFilter::new(cli.min_cov as usize);
+    let min_cov_filter = filter::MinCovFilter::new(args.min_cov as usize);
 
     let all_filters = filters
         .iter()
@@ -176,15 +186,15 @@ fn main() -> Result<()> {
         .chain(once(&min_cov_filter as &dyn Filter))
         .collect::<Vec<_>>();
     let mut vcf_writer = VCFWriter::create(
-        cli.output.as_ref().map_or("-", |o| o.as_str()),
+        args.output.as_ref().map_or("-", |o| o.as_str()),
         &contigs,
-        &cli.sample_name,
+        &args.sample_name,
         &all_filters,
         true,
     )
     .with_context(|| "failed to create vcf file")?;
-    let mut bam_reader = bam::IndexedReader::from_path(&cli.bamfile)
-        .with_context(|| format!("failed to open BAM file `{}`", &cli.bamfile))?;
+    let mut bam_reader = bam::IndexedReader::from_path(&args.bamfile)
+        .with_context(|| format!("failed to open BAM file `{}`", &args.bamfile))?;
     bam_reader.set_filters(
         htslib::BAM_FUNMAP
             | htslib::BAM_FSECONDARY
@@ -193,10 +203,10 @@ fn main() -> Result<()> {
             | htslib::BAM_FDUP,
     );
 
-    if cli.compute_baq {
+    if args.compute_baq {
         bam_reader
             .enable_baq_computation(
-                &cli.fasta_ref,
+                &args.fasta_ref,
                 (htslib::htsRealnFlags_BAQ_APPLY
                     | htslib::htsRealnFlags_BAQ_EXTEND
                     | htslib::htsRealnFlags_BAQ_ONT) as usize,
@@ -205,28 +215,28 @@ fn main() -> Result<()> {
     }
     for region in regions {
         let options = io::PileUpOptions {
-            min_mq: cli.min_mq as u8,
-            min_bq: cli.min_bq as u8,
-            max_cov: cli.max_cov as u32,
-            truncate_regions: cli.truncate_regions,
+            min_mq: args.min_mq as u8,
+            min_bq: args.min_bq as u8,
+            max_cov: args.max_cov as u32,
+            truncate_regions: args.truncate_regions,
         };
         let iter = io::pileup_region(&mut bam_reader, &fasta_reader, &region, &options)
             .with_context(|| "failed to create pileup iterator")?;
 
         let model = model::Model {
-            vaf_threshold: cli.model_params[2],
-            lambda_threshold_ref: cli.model_params[0],
-            lambda_thereshold_alt: cli.model_params[1],
+            vaf_threshold: args.model_params[2],
+            lambda_threshold_ref: args.model_params[0],
+            lambda_thereshold_alt: args.model_params[1],
         };
 
-        let apply_filters: Vec<_> = cli
+        let apply_filters: Vec<_> = args
             .apply_filters
             .as_ref()
             .map_or_else(Vec::new, |s| s.split(",").collect());
 
         for column in iter {
             let column = column.with_context(|| "failed to pileup column")?;
-            let (mut call, failed_filters) = if column.data.len() < cli.min_cov as usize {
+            let (mut call, failed_filters) = if column.data.len() < args.min_cov as usize {
                 let call = model::Call {
                     position: column.position.clone(),
                     genotype: model::Genotype::Unknown,
@@ -252,7 +262,7 @@ fn main() -> Result<()> {
                 let failed_filters = filter::failed_filters(&call, &filters);
                 (call, failed_filters)
             };
-            if cli.variants_only
+            if args.variants_only
                 && (call.genotype != model::Genotype::Heterozygous
                     && call.genotype != model::Genotype::HomozygousAlternate)
             {
@@ -266,8 +276,8 @@ fn main() -> Result<()> {
                 // Filter out sites with no matching filter
                 continue;
             }
-            if cli.set_failed_gts.is_some() && !failed_filters.is_empty() {
-                match cli.set_failed_gts.as_deref() {
+            if args.set_failed_gts.is_some() && !failed_filters.is_empty() {
+                match args.set_failed_gts.as_deref() {
                     Some(".") => {
                         call.genotype = model::Genotype::Unknown;
                     }
@@ -290,6 +300,17 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    if let Err(error) = match cli.command {
+        Commands::Call(args) => call_variants(args),
+    } {
+        eprintln!("error: {error:#}");
+        std::process::exit(1);
+    }
 }
 
 #[test]
