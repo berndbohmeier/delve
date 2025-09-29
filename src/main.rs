@@ -85,10 +85,6 @@ struct CallArgs {
     // #[clap(long = "min-vaf", default_value_t = 0.01)]
     // min_vaf: f64,
 
-    /// Truncate regions
-    #[clap(long = "truncate-regions", default_value_t = 0, value_name = "INT")]
-    truncate_regions: usize,
-
     /// Compute BAQ
     #[clap(long = "compute-baq")]
     compute_baq: bool,
@@ -218,7 +214,6 @@ fn call_variants(args: CallArgs) -> Result<()> {
             min_mq: args.min_mq as u8,
             min_bq: args.min_bq as u8,
             max_cov: args.max_cov as u32,
-            truncate_regions: args.truncate_regions,
         };
         let iter = io::pileup_region(&mut bam_reader, &fasta_reader, &region, &options)
             .with_context(|| "failed to create pileup iterator")?;

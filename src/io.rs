@@ -25,7 +25,6 @@ pub struct PileUpOptions {
     pub min_mq: u8,
     pub min_bq: u8,
     pub max_cov: u32,
-    pub truncate_regions: usize,
 }
 
 const DEFAULT_FLAG_FILTER: u32 =
@@ -57,9 +56,7 @@ pub fn pileup_region(
             Ok(p) => p,
             Err(e) => return Some(Err(Error::new(e))),
         };
-        if (p.pos() as usize) < region.start + options.truncate_regions
-            || (p.pos() as usize) >= region.end - options.truncate_regions
-        {
+        if (p.pos() as usize) < region.start || (p.pos() as usize) >= region.end {
             // Ignore reads outside of the region
             return None;
         }
