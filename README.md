@@ -4,7 +4,7 @@
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/delve-bio/README.html)
 
 # delve
-Variant caller for mixed infections
+Delve is a SNP variant caller for mixed infections, like they occur in Malaria. We primarly use it to call SNPs in plasmodium falciparum. It is able to call SNPs of minor clones at low percentages. 
 
 ## Install
 Delve can be install from bioconda
@@ -24,3 +24,10 @@ delve -f reference.fasta [-R amplicons.bed] input.bam
 Delve internally uses [rust-htslib](https://github.com/rust-bio/rust-htslib) to build a pileup of reads over each position, then uses a statistical model, which uses the base read errors of the reference and alternative bases on this position to calcululate a likelihood of a proportion p of alt vs. ref bases, and then uses a [Likelihood-ratio Test](https://en.wikipedia.org/wiki/Likelihood-ratio_test) to determine if there is enough evidence that a variant exists.
 After, it uses a strand bias test to filtered out wrong calls.
 Currently delve only calls variants on one sample at a time.
+
+## New Features
+We plan to implement a cluster based approach in the future to be able to call (micro) haplotypes.
+If you have other needs, like calling at multiple samples at a time, open an issue, and I might implement it. 
+
+## Contribute
+Contributions and suggestions are welcome. Feel free to open an issue with suggestions and we can talk about new features and potential pull requests, or email me at bohmeier[at].mpiib-berlin.mpg[dot]de
