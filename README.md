@@ -31,3 +31,6 @@ If you have other needs, like calling at multiple samples at a time, open an iss
 
 ## Contribute
 Contributions and suggestions are welcome. Feel free to open an issue with suggestions and we can talk about new features and potential pull requests, or email me at bohmeier[at].mpiib-berlin.mpg[dot]de
+
+## Acknowledgements
+This work was funded by the Bill and Melinda Gates Foundation (INV-003660, INV-048316).
