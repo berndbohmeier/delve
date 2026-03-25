@@ -1,9 +1,13 @@
 //! Variant caller for mixed infections, mainly with the goal to handle Malaria infections
 use std::iter::once;
+use std::sync::Arc;
+use std::sync::mpsc::sync_channel;
+use std::thread;
 
 use anyhow::Ok;
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
+use rayon::{ThreadPoolBuilder, prelude::*};
 use rust_htslib::bam;
 use rust_htslib::htslib;
 
@@ -134,9 +138,20 @@ struct CallArgs {
     /// Set genotypes of failed samples to missing value (.) or reference (0)
     #[clap(long = "set-failed-GTs", value_name = "TYPE", value_parser = ["0", "."])]
     set_failed_gts: Option<String>,
+
+    /// Set the number of threads to use (0 to use all available cores)
+    /// Note: one thread will be reserved for writing output, so the actual number of threads used for processing will be `threads - 1`
+    /// The parallelization is done on the region level, so this should not exceed the number of regions.
+    #[clap(short = 't', long = "threads", default_value_t = 1, value_name = "INT")]
+    threads: usize,
 }
 
 fn call_variants(args: CallArgs) -> Result<()> {
+    let threads = if args.threads == 0 {
+        std::thread::available_parallelism()?.get()
+    } else {
+        args.threads
+    };
     let fasta_reader = rust_htslib::faidx::Reader::from_path(&args.fasta_ref)
         .with_context(|| format!("failed to open FASTA file `{}`", &args.fasta_ref))?;
 
@@ -164,12 +179,12 @@ fn call_variants(args: CallArgs) -> Result<()> {
             .collect()
     };
 
-    let filters: Vec<Box<dyn filter::Filter>> = vec![
-        Box::new(filter::OddsRatioFilter::new(args.strand_bias_odds_ratio)),
-        Box::new(filter::TooManyLowQualityFilter::new(
+    let filters: Vec<Arc<dyn filter::Filter>> = vec![
+        Arc::new(filter::OddsRatioFilter::new(args.strand_bias_odds_ratio)),
+        Arc::new(filter::TooManyLowQualityFilter::new(
             args.low_quality_reads_filter_threshold,
         )),
-        Box::new(filter::ProbabableDeletionFilter::new(
+        Arc::new(filter::ProbabableDeletionFilter::new(
             args.deletion_filter_threshold,
         )),
     ];
@@ -189,111 +204,152 @@ fn call_variants(args: CallArgs) -> Result<()> {
         true,
     )
     .with_context(|| "failed to create vcf file")?;
-    let mut bam_reader = bam::IndexedReader::from_path(&args.bamfile)
-        .with_context(|| format!("failed to open BAM file `{}`", &args.bamfile))?;
-    bam_reader.set_filters(
-        htslib::BAM_FUNMAP
-            | htslib::BAM_FSECONDARY
-            | htslib::BAM_FQCFAIL
-            | htslib::BAM_FSUPPLEMENTARY
-            | htslib::BAM_FDUP,
-    );
 
-    if args.compute_baq {
-        bam_reader
-            .enable_baq_computation(
-                &args.fasta_ref,
-                (htslib::htsRealnFlags_BAQ_APPLY
-                    | htslib::htsRealnFlags_BAQ_EXTEND
-                    | htslib::htsRealnFlags_BAQ_ONT) as usize,
-            )
-            .with_context(|| "failed to enable BAQ computation")?;
-    }
-    for region in regions {
-        let options = io::PileUpOptions {
-            min_mq: args.min_mq as u8,
-            min_bq: args.min_bq as u8,
-            max_cov: args.max_cov as u32,
-        };
-        let iter = io::pileup_region(&mut bam_reader, &fasta_reader, &region, &options)
-            .with_context(|| "failed to create pileup iterator")?;
+    let (calls_tx, calls_rx) = sync_channel::<(model::Call, Vec<Vec<u8>>)>(1000);
 
-        let model = model::Model {
-            vaf_threshold: args.model_params[2],
-            lambda_threshold_ref: args.model_params[0],
-            lambda_thereshold_alt: args.model_params[1],
-        };
-
-        let apply_filters: Vec<_> = args
-            .apply_filters
-            .as_ref()
-            .map_or_else(Vec::new, |s| s.split(",").collect());
-
-        for column in iter {
-            let column = column.with_context(|| "failed to pileup column")?;
-            let (mut call, failed_filters) = if column.data.len() < args.min_cov as usize {
-                let call = model::Call {
-                    position: column.position.clone(),
-                    genotype: model::Genotype::Unknown,
-                    bias: model::BiasStats { odds_ratio: 0.0 },
-                    ref_al: column.reference,
-                    alt_al: vec![],
-                    stats: model::Stats {
-                        mvaf: 0.,
-                        vaf: 0.,
-                        log_likelihood_ratio_ref: 0.,
-                        log_likelihood_ratio_alt: 0.,
-                    },
-                    general: model::General {
-                        dels: column.dels,
-                        low_quals: column.low_quals,
-                        depth: column.data.len(),
-                    },
-                };
-                let failed_filters: Vec<&dyn Filter> = vec![&min_cov_filter];
-                (call, failed_filters)
-            } else {
-                let call = model.call(&column);
-                let failed_filters = filter::failed_filters(&call, &filters);
-                (call, failed_filters)
-            };
-            if args.variants_only
-                && (call.genotype != model::Genotype::Heterozygous
-                    && call.genotype != model::Genotype::HomozygousAlternate)
-            {
-                // Filter out non variant calls
-                continue;
-            }
-            if io::should_filter(
-                &apply_filters,
-                &failed_filters.iter().map(|f| f.name()).collect::<Vec<_>>(),
-            ) {
-                // Filter out sites with no matching filter
-                continue;
-            }
-            if args.set_failed_gts.is_some() && !failed_filters.is_empty() {
-                match args.set_failed_gts.as_deref() {
-                    Some(".") => {
-                        call.genotype = model::Genotype::Unknown;
-                    }
-                    Some("0") => {
-                        if !failed_filters.is_empty() {
-                            call.genotype = model::Genotype::HomozygousReference;
-                        }
-                    }
-                    Some(_) => {
-                        return Err(anyhow::anyhow!(
-                            "unknown value for --set-failed-GTs, use . or 0"
-                        ));
-                    }
-                    None => {}
-                }
-            }
+    // Spawn writer thread
+    let writer_handle = thread::spawn(move || -> Result<()> {
+        for (call, failed_filters) in calls_rx {
             vcf_writer
                 .write_call(&call, &failed_filters)
                 .with_context(|| "failed to write call to VCF")?;
         }
-    }
+        Ok(())
+    });
+
+    let n_regions = regions.len();
+    eprintln!("Processing {n_regions} regions using {} threads", threads);
+
+    let pool_threads = if threads > 1 { threads - 1 } else { 1 };
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(pool_threads)
+        .build()
+        .unwrap();
+
+    pool.install(|| {
+        regions.par_iter().try_for_each(|region| {
+            let fasta_reader = rust_htslib::faidx::Reader::from_path(&args.fasta_ref)
+                .with_context(|| format!("failed to open FASTA file `{}`", &args.fasta_ref))?;
+            let mut bam_reader = bam::IndexedReader::from_path(&args.bamfile)
+                .with_context(|| format!("failed to open BAM file `{}`", &args.bamfile))?;
+            bam_reader.set_filters(
+                htslib::BAM_FUNMAP
+                    | htslib::BAM_FSECONDARY
+                    | htslib::BAM_FQCFAIL
+                    | htslib::BAM_FSUPPLEMENTARY
+                    | htslib::BAM_FDUP,
+            );
+
+            if args.compute_baq {
+                bam_reader
+                    .enable_baq_computation(
+                        &args.fasta_ref,
+                        (htslib::htsRealnFlags_BAQ_APPLY
+                            | htslib::htsRealnFlags_BAQ_EXTEND
+                            | htslib::htsRealnFlags_BAQ_ONT) as usize,
+                    )
+                    .with_context(|| "failed to enable BAQ computation")?;
+            }
+            let options = io::PileUpOptions {
+                min_mq: args.min_mq as u8,
+                min_bq: args.min_bq as u8,
+                max_cov: args.max_cov as u32,
+            };
+            let iter = io::pileup_region(&mut bam_reader, &fasta_reader, region, &options)
+                .with_context(|| "failed to create pileup iterator")?;
+
+            let model = model::Model {
+                vaf_threshold: args.model_params[2],
+                lambda_threshold_ref: args.model_params[0],
+                lambda_thereshold_alt: args.model_params[1],
+            };
+
+            let apply_filters: Vec<_> = args
+                .apply_filters
+                .as_ref()
+                .map_or_else(Vec::new, |s| s.split(",").collect());
+
+            for column in iter {
+                let column = column.with_context(|| "failed to pileup column")?;
+                let (mut call, failed_filters) = if column.data.len() < args.min_cov as usize {
+                    let call = model::Call {
+                        position: column.position.clone(),
+                        genotype: model::Genotype::Unknown,
+                        bias: model::BiasStats { odds_ratio: 0.0 },
+                        ref_al: column.reference,
+                        alt_al: vec![],
+                        stats: model::Stats {
+                            mvaf: 0.,
+                            vaf: 0.,
+                            log_likelihood_ratio_ref: 0.,
+                            log_likelihood_ratio_alt: 0.,
+                        },
+                        general: model::General {
+                            dels: column.dels,
+                            low_quals: column.low_quals,
+                            depth: column.data.len(),
+                        },
+                    };
+                    let failed_filters: Vec<&dyn Filter> = vec![&min_cov_filter];
+                    (call, failed_filters)
+                } else {
+                    let call = model.call(&column);
+                    let failed_filters = filter::failed_filters(&call, &filters);
+                    (call, failed_filters)
+                };
+                if args.variants_only
+                    && (call.genotype != model::Genotype::Heterozygous
+                        && call.genotype != model::Genotype::HomozygousAlternate)
+                {
+                    // Filter out non variant calls
+                    continue;
+                }
+                if io::should_filter(
+                    &apply_filters,
+                    &failed_filters.iter().map(|f| f.name()).collect::<Vec<_>>(),
+                ) {
+                    // Filter out sites with no matching filter
+                    continue;
+                }
+                if args.set_failed_gts.is_some() && !failed_filters.is_empty() {
+                    match args.set_failed_gts.as_deref() {
+                        Some(".") => {
+                            call.genotype = model::Genotype::Unknown;
+                        }
+                        Some("0") => {
+                            if !failed_filters.is_empty() {
+                                call.genotype = model::Genotype::HomozygousReference;
+                            }
+                        }
+                        Some(_) => {
+                            return Err(anyhow::anyhow!(
+                                "unknown value for --set-failed-GTs, use . or 0"
+                            ));
+                        }
+                        None => {}
+                    }
+                }
+                calls_tx
+                    .send((
+                        call,
+                        failed_filters
+                            .iter()
+                            .map(|f| f.name().as_bytes().to_vec())
+                            .collect(),
+                    ))
+                    .with_context(|| "failed to send call to writer thread")?;
+            }
+            Ok(())
+        })
+    })?;
+
+    // Drop sender to signal writer thread we're done
+    drop(calls_tx);
+
+    // Wait for writer thread and propagate errors
+    writer_handle
+        .join()
+        .map_err(|e| anyhow::anyhow!("writer thread panicked: {:?}", e))??;
     Ok(())
 }
 

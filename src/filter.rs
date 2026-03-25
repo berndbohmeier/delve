@@ -1,8 +1,10 @@
 //! Various filters to filter called variants with likely issues
+use std::sync::Arc;
+
 use crate::model::{Call, Genotype};
 
 /// Filter variant calls
-pub trait Filter {
+pub trait Filter: Sync + Send {
     /// Return true if it passes the filter
     fn filter(&self, call: &Call) -> bool;
     /// Name of the filter, used in the vcf file
@@ -137,7 +139,7 @@ impl Filter for TooManyLowQualityFilter {
     }
 }
 
-pub fn failed_filters<'a>(call: &Call, filters: &'a [Box<dyn Filter>]) -> Vec<&'a dyn Filter> {
+pub fn failed_filters<'a>(call: &Call, filters: &'a [Arc<dyn Filter>]) -> Vec<&'a dyn Filter> {
     filters
         .iter()
         .filter_map(|f| {
