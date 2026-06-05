@@ -1,6 +1,4 @@
 //! Various filters to filter called variants with likely issues
-use std::sync::Arc;
-
 use crate::model::{Call, Genotype};
 
 /// Filter variant calls
@@ -8,7 +6,7 @@ pub trait Filter: Sync + Send {
     /// Return true if it passes the filter
     fn filter(&self, call: &Call) -> bool;
     /// Name of the filter, used in the vcf file
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
     /// Description of the filter, used in the vcf file
     fn description(&self) -> &str;
 }
@@ -31,7 +29,7 @@ impl Filter for MinCovFilter {
         panic!("Filtering of coverage should happen before the call")
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "MinCov"
     }
 
@@ -63,7 +61,7 @@ impl Filter for OddsRatioFilter {
             || call.bias.odds_ratio < self.threshold
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "StrandBiasOddsRatio"
     }
     fn description(&self) -> &str {
@@ -94,7 +92,7 @@ impl Filter for ProbabableDeletionFilter {
                 < self.threshold
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "ProbableDeletion"
     }
 
@@ -130,7 +128,7 @@ impl Filter for TooManyLowQualityFilter {
                 < self.threshold
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "TooManyLowQualityReads"
     }
 
@@ -139,15 +137,9 @@ impl Filter for TooManyLowQualityFilter {
     }
 }
 
-pub fn failed_filters<'a>(call: &Call, filters: &'a [Arc<dyn Filter>]) -> Vec<&'a dyn Filter> {
-    filters
-        .iter()
-        .filter_map(|f| {
-            if !f.filter(call) {
-                Some(f.as_ref())
-            } else {
-                None
-            }
-        })
-        .collect()
+pub fn failed_filters<'a, I>(call: &Call, filters: I) -> Vec<&'a dyn Filter>
+where
+    I: IntoIterator<Item = &'a dyn Filter>,
+{
+    filters.into_iter().filter(|f| !f.filter(call)).collect()
 }

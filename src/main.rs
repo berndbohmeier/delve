@@ -139,9 +139,10 @@ struct CallArgs {
     #[clap(long = "set-failed-GTs", value_name = "TYPE", value_parser = ["0", "."])]
     set_failed_gts: Option<String>,
 
-    /// Set the number of threads to use (0 to use all available cores)
-    /// Note: one thread will be reserved for writing output, so the actual number of threads used for processing will be `threads - 1`
-    /// The parallelization is done on the region level, so this should not exceed the number of regions.
+    /// Set the number of pool threads to use (0 to use all available cores)
+    /// Note: one additional thread will be reserved for writing output, so the actual number of threads used will be threads + 1.
+    /// The parallelization is done on the region level, so the number should not exceed the number of regions to avoid unnecessary overhead.
+    /// When using more than 1 thread, the output order is not guaranteed, sort the vcf file after running if you want it to be sorted.
     #[clap(short = 't', long = "threads", default_value_t = 1, value_name = "INT")]
     threads: usize,
 }
@@ -196,6 +197,18 @@ fn call_variants(args: CallArgs) -> Result<()> {
         .map(|f| f.as_ref())
         .chain(once(&min_cov_filter as &dyn Filter))
         .collect::<Vec<_>>();
+
+    let apply_filters: Vec<_> = args
+        .apply_filters
+        .as_ref()
+        .map_or_else(Vec::new, |s| s.split(",").collect());
+
+    let model = model::Model {
+        vaf_threshold: args.model_params[2],
+        lambda_threshold_ref: args.model_params[0],
+        lambda_thereshold_alt: args.model_params[1],
+    };
+
     let mut vcf_writer = VCFWriter::create(
         args.output.as_ref().map_or("-", |o| o.as_str()),
         &contigs,
@@ -205,7 +218,7 @@ fn call_variants(args: CallArgs) -> Result<()> {
     )
     .with_context(|| "failed to create vcf file")?;
 
-    let (calls_tx, calls_rx) = sync_channel::<(model::Call, Vec<Vec<u8>>)>(1000);
+    let (calls_tx, calls_rx) = sync_channel::<(model::Call, Vec<&'static str>)>(1000);
 
     // Spawn writer thread
     let writer_handle = thread::spawn(move || -> Result<()> {
@@ -218,11 +231,9 @@ fn call_variants(args: CallArgs) -> Result<()> {
     });
 
     let n_regions = regions.len();
-    eprintln!("Processing {n_regions} regions using {} threads", threads);
-
-    let pool_threads = if threads > 1 { threads - 1 } else { 1 };
+    eprintln!("Processing {n_regions} regions using {threads} threads");
     let pool = ThreadPoolBuilder::new()
-        .num_threads(pool_threads)
+        .num_threads(threads)
         .build()
         .unwrap();
 
@@ -258,17 +269,6 @@ fn call_variants(args: CallArgs) -> Result<()> {
             let iter = io::pileup_region(&mut bam_reader, &fasta_reader, region, &options)
                 .with_context(|| "failed to create pileup iterator")?;
 
-            let model = model::Model {
-                vaf_threshold: args.model_params[2],
-                lambda_threshold_ref: args.model_params[0],
-                lambda_thereshold_alt: args.model_params[1],
-            };
-
-            let apply_filters: Vec<_> = args
-                .apply_filters
-                .as_ref()
-                .map_or_else(Vec::new, |s| s.split(",").collect());
-
             for column in iter {
                 let column = column.with_context(|| "failed to pileup column")?;
                 let (mut call, failed_filters) = if column.data.len() < args.min_cov as usize {
@@ -294,7 +294,8 @@ fn call_variants(args: CallArgs) -> Result<()> {
                     (call, failed_filters)
                 } else {
                     let call = model.call(&column);
-                    let failed_filters = filter::failed_filters(&call, &filters);
+                    let failed_filters =
+                        filter::failed_filters(&call, filters.iter().map(|f| f.as_ref()));
                     (call, failed_filters)
                 };
                 if args.variants_only
@@ -304,10 +305,9 @@ fn call_variants(args: CallArgs) -> Result<()> {
                     // Filter out non variant calls
                     continue;
                 }
-                if io::should_filter(
-                    &apply_filters,
-                    &failed_filters.iter().map(|f| f.name()).collect::<Vec<_>>(),
-                ) {
+                let failed_filter_names =
+                    failed_filters.iter().map(|f| f.name()).collect::<Vec<_>>();
+                if io::should_filter(&apply_filters, &failed_filter_names) {
                     // Filter out sites with no matching filter
                     continue;
                 }
@@ -317,9 +317,7 @@ fn call_variants(args: CallArgs) -> Result<()> {
                             call.genotype = model::Genotype::Unknown;
                         }
                         Some("0") => {
-                            if !failed_filters.is_empty() {
-                                call.genotype = model::Genotype::HomozygousReference;
-                            }
+                            call.genotype = model::Genotype::HomozygousReference;
                         }
                         Some(_) => {
                             return Err(anyhow::anyhow!(
@@ -330,13 +328,7 @@ fn call_variants(args: CallArgs) -> Result<()> {
                     }
                 }
                 calls_tx
-                    .send((
-                        call,
-                        failed_filters
-                            .iter()
-                            .map(|f| f.name().as_bytes().to_vec())
-                            .collect(),
-                    ))
+                    .send((call, failed_filter_names))
                     .with_context(|| "failed to send call to writer thread")?;
             }
             Ok(())

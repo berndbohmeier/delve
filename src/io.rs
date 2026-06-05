@@ -262,7 +262,11 @@ impl VCFWriter {
         Ok(VCFWriter { vcf })
     }
 
-    pub fn write_call(&mut self, call: &Call, failed_filters: &[Vec<u8>]) -> Result<(), VCFError> {
+    pub fn write_call(
+        &mut self,
+        call: &Call,
+        failed_filter_names: &[&str],
+    ) -> Result<(), VCFError> {
         let mut record = self.vcf.empty_record();
         let header = self.vcf.header();
         record.set_rid(header.name2rid(call.position.name.as_bytes()).ok());
@@ -302,12 +306,12 @@ impl VCFWriter {
                 call.stats.log_likelihood_ratio_alt as f32,
             ],
         )?;
-        let filter_ids: Vec<_> = if !failed_filters.is_empty() {
-            failed_filters
+        let filter_ids: Vec<_> = if !failed_filter_names.is_empty() {
+            failed_filter_names
                 .iter()
                 .map(|f| {
                     header
-                        .name_to_id(f)
+                        .name_to_id(f.as_bytes())
                         .expect("should have filter {} in header")
                 })
                 .collect()
