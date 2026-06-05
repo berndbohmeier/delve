@@ -235,7 +235,7 @@ fn call_variants(args: CallArgs) -> Result<()> {
     let pool = ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
-        .unwrap();
+        .with_context(|| "failed to create thread pool")?;
 
     pool.install(|| {
         regions.par_iter().try_for_each(|region| {
