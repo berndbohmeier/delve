@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.99"
 argmin = "0.10.0"
 clap = { version = "4.5.40", features = ["derive"] }
+rayon = "1.11.0"
 rust-htslib = { version = "0.50.0", default-features = false, git = "https://github.com/berndbohmeier/rust-htslib", branch = "baq-compute" }
 thiserror = "2.0.16"
 
