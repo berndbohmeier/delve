@@ -312,7 +312,7 @@ impl VCFWriter {
                 .map(|f| {
                     header
                         .name_to_id(f.as_bytes())
-                        .expect("should have filter {} in header")
+                        .unwrap_or_else(|_| panic!("filter {} not found in header", f))
                 })
                 .collect()
         } else {
