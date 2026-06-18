@@ -34,3 +34,7 @@ Contributions and suggestions are welcome. Feel free to open an issue with sugge
 
 ## Acknowledgements
 This work was funded by the Bill and Melinda Gates Foundation (INV-003660, INV-048316).
+
+## Citation
+If you use this tool, please cite
+Mwenda, M., Mosler, K., Bohmeier, B. et al. Continental-scale genomic surveillance of Plasmodium falciparum malaria across sub-Saharan Africa with rapid nanopore sequencing. Nat Commun 17, 4218 (2026)
